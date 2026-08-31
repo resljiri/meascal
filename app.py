@@ -9,6 +9,10 @@ import streamlit as st
 
 from src.data import load_calibration_data, apply_filters, model_coverage_summary
 from src.model import AdaptiveWeibullModel
+from src.model_registry import (
+    active_descriptor, registry_token, load_active_model, save_versioned_model,
+    list_versions, activate_version, activate_imported, make_persistence_bundle
+)
 from src.diagnostics import support_summary, profile_data_subset, current_profile_subset, fit_direct_weibull, turnbull_curve, direct_survival_ci
 try:
     from src.diagnostics import batch_predict_fast
@@ -30,7 +34,9 @@ st.title('Calibration Reliability System')
 @st.cache_data
 def get_data(): return load_calibration_data(ROOT/FAMILY['data_file'],SENTINEL)
 @st.cache_resource
-def get_imported_model(): return AdaptiveWeibullModel(FAMILY['model']).load_imported(ROOT/FAMILY['model_dir'])
+def get_persisted_model(token):
+    # token is part of the cache key and changes whenever models/active_model.json changes
+    return load_active_model(ROOT, FAMILY['model'], None)
 
 def rel_text(rel):
     x=100*rel
@@ -146,8 +152,14 @@ def cached_session_put(namespace,key,value,max_items=80):
     return value
 
 
-df=get_data(); base_model=get_imported_model().set_population_context(df)
-model=st.session_state.get('active_model',base_model); model_name=st.session_state.get('active_model_name','Importovaný model caliper_v1')
+df=get_data()
+_active_token=registry_token(ROOT)
+base_model, active_desc=get_persisted_model(_active_token)
+base_model.set_population_context(df)
+# Session model is used immediately after a refit. On a fresh app process the repository
+# descriptor above determines the persistent active model.
+model=st.session_state.get('active_model',base_model)
+model_name=st.session_state.get('active_model_name', f"{active_desc.get('version','model')} ({'uložený artefakt' if active_desc.get('kind')=='joblib' else 'importovaný základ'})")
 
 with st.sidebar:
     st.caption(f"Aktivní model: **{model_name}**")
@@ -158,8 +170,12 @@ with st.sidebar:
     perf_mode=st.radio('Režim výpočtu',['Rychlý','Přesný'],horizontal=True,help='Bodový odhad je stejný. Liší se počet Monte Carlo vzorků pro CI a diagnostiku.')
     ci_mode=st.selectbox('CI v individuální analýze',['Rychlé CI','Přesné CI','Bez CI'],index=0)
     ci_samples=750 if ci_mode=='Rychlé CI' else (5000 if ci_mode=='Přesné CI' else 0)
-    if model is not base_model and st.button('Vrátit importovaný model'):
-        st.session_state.pop('active_model',None); st.session_state.pop('active_model_name',None); st.rerun()
+    st.caption(f"Repozitářový aktivní artefakt: **{active_desc.get('version','—')}**")
+    if active_desc.get('kind') != 'imported_csv' and st.button('Aktivovat původní caliper_v1'):
+        activate_imported(ROOT, 'caliper_v1')
+        st.session_state.pop('active_model',None); st.session_state.pop('active_model_name',None)
+        st.session_state.pop('adaptive_prediction_cache',None)
+        st.rerun()
 
 page=st.sidebar.radio('Modul',['Dashboard','Výběr množiny','Jedno měřidlo','Hromadná analýza','Model a diagnostika','Přeučení modelu'])
 
@@ -429,18 +445,60 @@ elif page=='Model a diagnostika':
         fig=go.Figure(go.Histogram(x=model.prod.u_k,nbinsx=20)); fig.update_layout(title='PROD efekty pro k'); st.plotly_chart(fig,use_container_width=True)
 
 elif page=='Přeučení modelu':
-    st.subheader('Přeučení kandidátního modelu'); st.warning('Refit může trvat. Nový refit využívá i záznamy s částečně chybějícími kovariátami: každý řádek informuje ty efekty, pro které má známá data. Kovarianční matice umožní 95% CI.')
+    st.subheader('Přeučení a registr modelů')
+    st.info('Model se po fitu ukládá jako verzovaný artefakt a stává se aktivním. Běžné reruny aplikace ho znovu netrénují. Na Streamlit Community Cloud je však disk kontejneru dočasný; aby nový model přežil reboot/redeploy, je potřeba uložené soubory z models/ commitnout do GitHubu.')
     st.dataframe(model_coverage_summary(df),use_container_width=True,hide_index=True)
+
+    current=active_descriptor(ROOT)
+    st.markdown(f"**Aktivní uložený model:** `{current.get('version','—')}`  ")
+    st.caption(f"Zdroj: {current.get('source','—')} | artefakt: {current.get('path','—')}")
+
+    versions=list_versions(ROOT)
+    if versions:
+        labels=[v.get('version','?') for v in versions]
+        chosen=st.selectbox('Dříve uložené verze v registru',labels,index=0)
+        cva,cvb=st.columns([1,2])
+        if cva.button('Aktivovat vybranou verzi'):
+            activate_version(ROOT,chosen)
+            st.session_state.pop('active_model',None); st.session_state.pop('active_model_name',None)
+            for k0 in ['adaptive_prediction_cache','direct_fit_cache','turnbull_cache']:
+                st.session_state.pop(k0,None)
+            st.rerun()
+        with cvb:
+            meta=next((v for v in versions if v.get('version')==chosen),{})
+            fit=meta.get('fit') or {}
+            st.caption(f"n={fit.get('n','—')}, NOK={fit.get('NOK','—')}, parametry={fit.get('n_params',meta.get('n_parameters','—'))}, CI={'ano' if meta.get('covariance_available') else 'ne'}")
+
+    st.divider()
+    st.markdown('### Nový refit')
     compute_cov=st.checkbox('Po fitu dopočítat kovarianční matici a CI',value=True)
-    if st.button('Přeučit na aktuálních datech',type='primary'):
+    version_note=st.text_input('Poznámka k verzi',value='',placeholder='např. data 2026-08, nový refit')
+    if st.button('Přeučit na aktuálních datech a uložit novou verzi',type='primary'):
         with st.spinner('Probíhá fit a případný výpočet kovarianční matice...'):
-            candidate=AdaptiveWeibullModel(FAMILY['model']).fit(df,compute_covariance=compute_cov); out=ROOT/'models'/'candidate_caliper.joblib'; candidate.save(out)
-            st.session_state['candidate_model']=candidate; st.session_state['active_model']=candidate; st.session_state['active_model_name']='Kandidátní model – aktuální relace'; st.session_state['candidate_fit']=candidate.fit_result
-            st.session_state.pop('adaptive_prediction_cache',None); st.session_state.pop('direct_fit_cache',None); st.session_state.pop('turnbull_cache',None)
-        st.success(f"Kandidátní model uložen a aktivován: {out}")
-        if candidate.covariance is not None: st.success('Kovarianční matice byla vypočtena. CI jsou dostupná pro η, k i libovolné tR.')
-    cand_path=ROOT/'models'/'candidate_caliper.joblib'
-    if cand_path.exists() and 'candidate_model' not in st.session_state and st.button('Načíst dříve uložený kandidátní model'):
-        candidate=AdaptiveWeibullModel.load(cand_path).set_population_context(df); st.session_state['candidate_model']=candidate; st.session_state['active_model']=candidate; st.session_state['active_model_name']='Kandidátní model – načtený'; st.rerun()
-    if 'candidate_fit' in st.session_state: st.json(st.session_state['candidate_fit'])
+            candidate=AdaptiveWeibullModel(FAMILY['model']).fit(df,compute_covariance=compute_cov)
+            # Lightweight fingerprint for auditability; no raw data are embedded in metadata.
+            data_sig=hashlib.sha1(pd.util.hash_pandas_object(df[['Left','Right','PROD','TYP','CAT','CLMARK','RNG']],index=True).values.tobytes()).hexdigest()[:16]
+            desc,folder=save_versioned_model(ROOT,candidate,source=(version_note.strip() or 'refit from application'),data_fingerprint=data_sig,activate=True)
+            candidate.set_population_context(df)
+            st.session_state['active_model']=candidate
+            st.session_state['active_model_name']=f"{desc['version']} – nově přeučený"
+            st.session_state['candidate_fit']=candidate.fit_result
+            for k0 in ['adaptive_prediction_cache','direct_fit_cache','turnbull_cache']:
+                st.session_state.pop(k0,None)
+            bundle=make_persistence_bundle(ROOT,desc,ROOT/'models'/'active_model_bundle.zip')
+            st.session_state['last_model_bundle']=str(bundle)
+            st.session_state['last_model_desc']=desc
+        st.success(f"Nová verze **{desc['version']}** byla uložena a aktivována. Do dalšího refitu ji aplikace používá bez nového učení.")
+        if candidate.covariance is not None:
+            st.success('Kovarianční matice byla vypočtena; CI jsou dostupná.')
+
+    bundle_path=st.session_state.get('last_model_bundle')
+    if bundle_path and Path(bundle_path).exists():
+        data=Path(bundle_path).read_bytes()
+        st.download_button('Stáhnout balíček aktivního modelu pro GitHub',data=data,file_name='active_model_bundle.zip',mime='application/zip')
+        st.caption('Pro trvalé zachování na Streamlit Cloud rozbal tento ZIP do kořene lokálního projektu (obsahuje models/active_model.json a models/registry/<verze>/...), potom proveď git add models → commit → push. Po redeployi se tato verze automaticky načte.')
+
+    if 'candidate_fit' in st.session_state:
+        with st.expander('Výsledek posledního fitu'):
+            st.json(st.session_state['candidate_fit'])
 
