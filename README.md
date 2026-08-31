@@ -78,3 +78,12 @@ V6 nemění statistickou logiku modelu. Optimalizuje způsob, jakým Streamlit v
 - po přeučení se výpočetní cache invaliduje.
 
 Výchozí doporučení pro Streamlit Community Cloud: `Rychlý` + `Rychlé CI`; Turnbull a přímý fit zapínat jen při diagnostice.
+
+## Změny ve v6.2
+
+- 95% bodový interval spolehlivosti lze vykreslit jako plochu kolem survival křivky, pokud má aktivní model/fit kovarianční matici.
+- Časy η a tR se v individuální analýze zobrazují ve dnech i v letech (1 desetinné místo).
+- Datová důvěra kombinuje velikost aktuální množiny, počet NOK, back-off, existenci přesné kombinace a šířku CI, pokud je dostupná.
+- Ovládací prvky grafu jsou přímo nad grafem; datová podpora, rozklad efektů a vysvětlení jsou až pod grafem.
+- Odstraněn textový popisek verze v záhlaví a spodní technická nápověda k souborům aplikace.
+- Loader již nevyřazuje celý záznam jen proto, že chybí některá kovariáta. Při novém refitu může záznam bez TYP stále informovat např. intercept, CAT, CLMARK×RNG a PROD, jsou-li tyto hodnoty známé. Importovaný model zůstává původním modelem a jeho koeficienty se tím automaticky nemění.

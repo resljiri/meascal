@@ -41,6 +41,11 @@ class AdaptiveWeibullModel:
 
     @classmethod
     def _is_all(cls, value):
+        try:
+            if pd.isna(value):
+                return True
+        except Exception:
+            pass
         return value is None or str(value).strip() in {"", cls.ALL_TOKEN, "ALL", "VŠECHNY", "Vsechny"}
 
     def set_population_context(self, df: pd.DataFrame):
@@ -48,11 +53,11 @@ class AdaptiveWeibullModel:
         w = {}
         for col in ["CAT", "COMBO", "PROD", "PROD_TYP", "CLMARK", "RNG_GRP"]:
             if col in df.columns:
-                w[col] = df[col].astype(str).value_counts().to_dict()
+                w[col] = df.loc[df[col].notna(), col].astype(str).value_counts().to_dict()
         if "PROD" in df.columns and "PROD_TYP" in df.columns:
             w["TYPE_BY_PROD"] = {
-                str(prod): g["PROD_TYP"].astype(str).value_counts().to_dict()
-                for prod, g in df.groupby("PROD")
+                str(prod): g.loc[g["PROD_TYP"].notna(), "PROD_TYP"].astype(str).value_counts().to_dict()
+                for prod, g in df[df["PROD"].notna()].groupby("PROD")
             }
         if "CLMARK" in df.columns and "COMBO" in df.columns:
             w["COMBO_BY_CLMARK"] = {
@@ -281,6 +286,19 @@ class AdaptiveWeibullModel:
         times=np.asarray(times,float)
         return np.exp(-(times/r.eta)**r.k)
 
+    def survival_ci(self, profile: dict, times: np.ndarray, n_samples: int=1000, reliability: float=0.90):
+        """Approximate pointwise 95% confidence band for R(t) from parameter covariance."""
+        if self.covariance is None or self.theta is None:
+            return None
+        sims=self._simulate_prediction(profile,max(int(n_samples),50),reliability=float(reliability))
+        if len(sims)==0:
+            return None
+        times=np.asarray(times,float)
+        eta=sims[:,0][:,None]; k=sims[:,1][:,None]
+        surv=np.exp(-np.power(np.maximum(times[None,:],0.0)/eta,k))
+        lo,hi=np.quantile(surv,[.025,.975],axis=0)
+        return lo,hi
+
     # ---------------- training ----------------
     def fit(self, df: pd.DataFrame, compute_covariance: bool=True):
         cfg=self.config
@@ -293,10 +311,10 @@ class AdaptiveWeibullModel:
             r=index.loc[key]
             return int(r.n)>=spec["min_n"] and int(r.NOK)>=spec["min_nok"]
 
-        cats=sorted([x for x in df.CAT.astype(str).unique() if x != cfg.get("reference_cat","D")])
-        combos=sorted(df.COMBO.astype(str).unique())
-        prods=sorted(df.PROD.astype(str).unique())
-        types=sorted(df.PROD_TYP.astype(str).unique())
+        cats=sorted([str(x) for x in df.loc[df.CAT.notna(),"CAT"].unique() if str(x) != cfg.get("reference_cat","D")])
+        combos=sorted(df.loc[df.COMBO.notna(),"COMBO"].astype(str).unique())
+        prods=sorted(df.loc[df.PROD.notna(),"PROD"].astype(str).unique())
+        types=sorted(df.loc[df.PROD_TYP.notna(),"PROD_TYP"].astype(str).unique())
 
         eta_combo=[x for x in combos if active(combo_sup,x,th["eta_combo"])]
         k_combo=[x for x in combos if active(combo_sup,x,th["k_combo"])]
@@ -314,7 +332,12 @@ class AdaptiveWeibullModel:
         L=df.Left.to_numpy(float); R=df.Right.to_numpy(float); n=len(df)
         def build_lp(theta):
             le=np.full(n,theta[pos["eta_intercept"]]); lk=np.full(n,theta[pos["k_intercept"]])
-            catv=df.CAT.astype(str).to_numpy(); combv=df.COMBO.astype(str).to_numpy(); pv=df.PROD.astype(str).to_numpy(); tv=df.PROD_TYP.astype(str).to_numpy()
+            # Missing covariates simply do not receive that specific effect. The row still
+            # contributes to the intercept and every broader/sibling factor that is known.
+            catv=df.CAT.astype("string").fillna("__MISSING__").astype(str).to_numpy()
+            combv=df.COMBO.astype("string").fillna("__MISSING__").astype(str).to_numpy()
+            pv=df.PROD.astype("string").fillna("__MISSING__").astype(str).to_numpy()
+            tv=df.PROD_TYP.astype("string").fillna("__MISSING__").astype(str).to_numpy()
             for x in cats:
                 m=catv==x; le[m]+=theta[pos[f"eta_CAT:{x}"]]; lk[m]+=theta[pos[f"k_CAT:{x}"]]
             for x in eta_combo: le[combv==x]+=theta[pos[f"eta_combo:{x}"]]
@@ -369,17 +392,17 @@ class AdaptiveWeibullModel:
         self.cat_k=pd.DataFrame([{"term":"intercept","gamma_logk":t[pos["k_intercept"]]}]+[{"term":f"CAT_{x}","gamma_logk":t[pos[f"k_CAT:{x}"]]} for x in cats])
         self.cat_k["shape_ratio"]=np.exp(self.cat_k.gamma_logk)
         rows=[]
-        for x in sorted(df.COMBO.unique()):
+        for x in sorted(df.loc[df.COMBO.notna(),"COMBO"].astype(str).unique()):
             r=combo_sup.loc[x]; ae=x in eta_combo; ak=x in k_combo; av=t[pos[f"eta_combo:{x}"]] if ae else 0; kv=t[pos[f"k_combo:{x}"]] if ak else 0
             rows.append({"COMBO":x,"n":int(r.n),"NOK":int(r.NOK),"a_eta":av,"eta_multiplier":np.exp(av),"a_k":kv,"k_multiplier":np.exp(kv),"eta_active":ae,"k_active":ak})
         self.combo=pd.DataFrame(rows)
         rows=[]
-        for x in sorted(df.PROD.astype(str).unique()):
+        for x in sorted(df.loc[df.PROD.notna(),"PROD"].astype(str).unique()):
             r=prod_sup.loc[x]; ae=x in eta_prod; ak=x in k_prod; av=t[pos[f"eta_prod:{x}"]] if ae else 0; kv=t[pos[f"k_prod:{x}"]] if ak else 0
             rows.append({"PROD":x,"n":int(r.n),"NOK":int(r.NOK),"u_eta":av,"eta_multiplier":np.exp(av),"u_k":kv,"k_multiplier":np.exp(kv),"eta_active":ae,"k_active":ak})
         self.prod=pd.DataFrame(rows)
         rows=[]
-        for x in sorted(df.PROD_TYP.astype(str).unique()):
+        for x in sorted(df.loc[df.PROD_TYP.notna(),"PROD_TYP"].astype(str).unique()):
             r=type_sup.loc[x]; ae=x in eta_type; ak=x in k_type; av=t[pos[f"eta_type:{x}"]] if ae else 0; kv=t[pos[f"k_type:{x}"]] if ak else 0
             rows.append({"PROD_TYP":x,"n":int(r.n),"NOK":int(r.NOK),"v_eta":av,"eta_multiplier":np.exp(av),"v_k":kv,"k_multiplier":np.exp(kv),"eta_active":ae,"k_active":ak})
         self.typ=pd.DataFrame(rows)

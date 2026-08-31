@@ -216,3 +216,20 @@ def batch_predict_fast(model, df: pd.DataFrame, reliability: float = 0.90) -> pd
                       "warning":" | ".join(q.warnings)})
     lookup=pd.DataFrame(preds)
     return work.merge(lookup,on=key_cols,how="left")[["_row_id","eta","k","t_target","eta_level","k_level","warning"]]
+
+
+def direct_survival_ci(direct: dict | None, times: np.ndarray, n_samples: int = 1000):
+    """Pointwise 95% confidence band for a direct Weibull fit."""
+    if not direct or direct.get("covariance") is None:
+        return None
+    cov=np.asarray(direct["covariance"],float)
+    if cov.shape != (2,2) or not np.all(np.isfinite(cov)):
+        return None
+    rng=np.random.default_rng(314159)
+    mu=np.array([np.log(float(direct["eta"])),np.log(float(direct["k"]))])
+    sims=rng.multivariate_normal(mu,cov,size=max(int(n_samples),50),check_valid="ignore")
+    eta=np.exp(sims[:,0])[:,None]; k=np.exp(sims[:,1])[:,None]
+    t=np.asarray(times,float)[None,:]
+    surv=np.exp(-np.power(np.maximum(t,0.0)/eta,k))
+    lo,hi=np.quantile(surv,[.025,.975],axis=0)
+    return lo,hi

@@ -7,9 +7,9 @@ import yaml
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.data import load_calibration_data, apply_filters
+from src.data import load_calibration_data, apply_filters, model_coverage_summary
 from src.model import AdaptiveWeibullModel
-from src.diagnostics import support_summary, profile_data_subset, current_profile_subset, fit_direct_weibull, turnbull_curve
+from src.diagnostics import support_summary, profile_data_subset, current_profile_subset, fit_direct_weibull, turnbull_curve, direct_survival_ci
 try:
     from src.diagnostics import batch_predict_fast
 except ImportError:
@@ -26,7 +26,6 @@ st.set_page_config(page_title='Calibration Reliability System',layout='wide')
 css_path=ROOT/'assets/style.css'
 if css_path.exists(): st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>",unsafe_allow_html=True)
 st.title('Calibration Reliability System')
-st.caption('v6.1 – výkonově optimalizovaná verze: cache, lazy diagnostika, rychlé/přesné CI, rychlejší batch a stránkovaný výběr.')
 
 @st.cache_data
 def get_data(): return load_calibration_data(ROOT/FAMILY['data_file'],SENTINEL)
@@ -65,20 +64,58 @@ def selector(label,field,col,data,prior,valid_only,key,disabled=False):
     return col.selectbox(label,opts,format_func=fmt,key=key)
 def ci_text(ci,fmt='.0f'):
     return 'není dostupný' if not ci else f"{format(ci[0],fmt)} až {format(ci[1],fmt)}"
+
+def days_years(v, decimals_days=0):
+    if v is None or not np.isfinite(v): return '—'
+    d=f"{float(v):,.{decimals_days}f}".replace(',', ' ')
+    y=f"{float(v)/365.25:.1f}".replace('.', ',')
+    return f"{d} d ({y} roku)"
+
+def ci_days_years(ci):
+    if not ci: return 'není dostupný'
+    return f"{days_years(ci[0])} až {days_years(ci[1])}"
+
 def direct_survival(direct,times): return np.exp(-(np.asarray(times,float)/direct['eta'])**direct['k'])
-def confidence_adaptive(r):
+
+def confidence_adaptive(r, current_n=0, current_nok=0, exact_exists=True):
+    score=0.0; reasons=[]
+    if current_n >= 200: score += 2; reasons.append('n≥200')
+    elif current_n >= 70: score += 1; reasons.append('n≥70')
+    elif current_n < 30: score -= 1; reasons.append('n<30')
+    if current_nok >= 100: score += 3; reasons.append('NOK≥100')
+    elif current_nok >= 30: score += 2; reasons.append('NOK≥30')
+    elif current_nok >= 10: score += 1; reasons.append('NOK≥10')
+    else: score -= 1; reasons.append('NOK<10')
     levels={r.backoff.get('ETA'),r.backoff.get('K')}
-    ciw=None
-    if r.t_target_ci95 and r.t_target>0: ciw=(r.t_target_ci95[1]-r.t_target_ci95[0])/r.t_target
-    if levels <= {'TYP','PROD'} and (ciw is None or ciw<=0.70): return 'HIGH','Vysoká'
-    if 'CAT/POPULATION' not in levels and (ciw is None or ciw<=1.40): return 'MEDIUM','Střední'
-    return 'LOW','Nízká'
+    if 'CAT/POPULATION' in levels: score -= 2; reasons.append('populační back-off')
+    elif 'COMBO' in levels: score -= .5; reasons.append('back-off na kombinaci')
+    if not exact_exists: score -= 1; reasons.append('nepozorovaná přesná kombinace')
+    if r.t_target_ci95 and r.t_target>0:
+        ciw=(r.t_target_ci95[1]-r.t_target_ci95[0])/r.t_target
+        if ciw <= .70: score += 1; reasons.append('úzké CI')
+        elif ciw > 1.40: score -= 2; reasons.append('široké CI')
+    if score >= 4: code,label='HIGH','Vysoká'
+    elif score >= 2: code,label='MEDIUM','Střední'
+    else: code,label='LOW','Nízká'
+    return code,label,score,', '.join(reasons)
+
 def confidence_direct(d):
-    if d is None: return 'LOW','Nízká'
+    if d is None: return 'LOW','Nízká',0.0,'fit není dostupný'
     n,nok=d['n'],d['NOK']; ci=d.get('t_target_ci95'); width=(ci[1]-ci[0])/d['t_target'] if ci and d['t_target']>0 else None
-    if n>=70 and nok>=20 and (width is None or width<=.7): return 'HIGH','Vysoká'
-    if n>=30 and nok>=10 and (width is None or width<=1.4): return 'MEDIUM','Střední'
-    return 'LOW','Nízká'
+    score=0.0; reasons=[]
+    if n>=200: score+=2; reasons.append('n≥200')
+    elif n>=70: score+=1; reasons.append('n≥70')
+    elif n<30: score-=1; reasons.append('n<30')
+    if nok>=100: score+=3; reasons.append('NOK≥100')
+    elif nok>=30: score+=2; reasons.append('NOK≥30')
+    elif nok>=10: score+=1; reasons.append('NOK≥10')
+    else: score-=1; reasons.append('NOK<10')
+    if width is not None:
+        if width<=.70: score+=1; reasons.append('úzké CI')
+        elif width>1.40: score-=2; reasons.append('široké CI')
+    if score>=4: return 'HIGH','Vysoká',score,', '.join(reasons)
+    if score>=2: return 'MEDIUM','Střední',score,', '.join(reasons)
+    return 'LOW','Nízká',score,', '.join(reasons)
 def badge(code,label):
     colors={'HIGH':'#15803d','MEDIUM':'#b45309','LOW':'#b91c1c'}
     st.markdown(f"<span style='background:{colors[code]};color:white;padding:0.28rem 0.65rem;border-radius:999px;font-weight:700'>Datová důvěra: {label}</span>",unsafe_allow_html=True)
@@ -129,6 +166,8 @@ page=st.sidebar.radio('Modul',['Dashboard','Výběr množiny','Jedno měřidlo',
 if page=='Dashboard':
     c1,c2,c3,c4=st.columns(4); c1.metric('Záznamy',f"{len(df):,}".replace(',',' ')); c2.metric('NOK',f"{int(df.NOK.sum()):,}".replace(',',' ')); c3.metric('Výrobci',df.PROD.nunique()); c4.metric('Typy',df.PROD_TYP.nunique())
     st.info(f"Globálně nastavená cílová spolehlivost je {target_pct:.1f} %, tedy t{rel_text(target_rel)}. Nastavení v levém panelu používá individuální i hromadná analýza.")
+    complete=int(df[['PROD','TYP','CAT','CLMARK','RNG']].notna().all(axis=1).sum())
+    st.caption(f'Databáze obsahuje {len(df)} platných intervalových záznamů; kompletní profil všech pěti faktorů má {complete}. Při novém refitu mohou částečné záznamy informovat ty efekty, pro které mají známé kovariáty.')
     st.dataframe(df[['PROD','TYP_STR','CAT','CLMARK','RNG','Left','Right','NOK']].head(100),use_container_width=True)
 
 elif page=='Výběr množiny':
@@ -203,9 +242,13 @@ elif page=='Jedno měřidlo':
     p={'PROD':prod,'TYP':typ,'CAT':cat,'CLMARK':clm,'RNG':rng}
 
     selected_obs=current_profile_subset(df,p); all_specific=all(v!=ALL for v in [prod,typ,cat,clm,rng])
-    if all_specific and len(selected_obs)==0: st.error('Tato přesná kombinace faktorů v databázi neexistuje. Hierarchický model může dát extrapolační odhad, přímý fit této vrstvy však není možný.')
-    elif len(selected_obs)==0: st.warning('Pro aktuálně zadanou množinu nejsou v databázi žádné záznamy.')
-    else: st.caption(f"Aktuálním omezením odpovídá **{len(selected_obs)}** záznamů, z toho **{int(selected_obs.NOK.sum())} NOK**.")
+    exact_exists=len(selected_obs)>0
+    if all_specific and not exact_exists:
+        st.error('Tato přesná kombinace faktorů v databázi neexistuje. Hierarchický model může dát extrapolační odhad, přímý fit této vrstvy však není možný.')
+    elif not exact_exists:
+        st.warning('Pro aktuálně zadanou množinu nejsou v databázi žádné záznamy.')
+    else:
+        st.caption(f"Aktuálním omezením odpovídá **{len(selected_obs)}** záznamů, z toho **{int(selected_obs.NOK.sum())} NOK**.")
 
     level_labels={'CURRENT':'Aktuálně zadaná množina','TYPE':'PROD + TYP','PROD':'Pouze výrobce PROD','COMBO':'CLMARK × RNG','ALL':'Všechny posuvky'}
     a1,a2=st.columns([1.2,1.4])
@@ -214,15 +257,7 @@ elif page=='Jedno měřidlo':
     observed=profile_data_subset(df,p,data_level)
     st.caption(f"Vybraná datová vrstva: **{len(observed)}** záznamů | NOK: **{int(observed.NOK.sum()) if len(observed) else 0}**")
 
-    # Diagnostic switches are read before expensive calculations. In adaptive mode the
-    # direct fit is computed only when explicitly requested as a comparison.
-    d1,d2,d3=st.columns(3)
-    show_raw=d1.checkbox('Zobrazit skutečná vstupní data',value=False)
-    show_turnbull=d2.checkbox('Zobrazit Turnbullovu křivku',value=False)
-    show_comparison=d3.checkbox('Zobrazit druhý model pro porovnání',value=False,help='Zapnutí může vyvolat výpočet přímého Weibull fitu. Výsledek se pak ukládá do cache relace.')
-
-    token=model_cache_token(model_name,model)
-    pkey=profile_key(p)
+    token=model_cache_token(model_name,model); pkey=profile_key(p)
     adapt_key=(token,pkey,round(target_rel,6),ci_samples)
     adaptive=cached_session_get('adaptive_prediction_cache',adapt_key)
     if adaptive is None:
@@ -232,37 +267,114 @@ elif page=='Jedno měřidlo':
         st.session_state['last_adaptive_ms']=1000*(time.perf_counter()-t0)
 
     direct=None
-    need_direct=(analysis_mode=='DIRECT') or show_comparison
-    direct_ci=(ci_samples>0)
-    if need_direct and len(observed)>=2:
-        dkey=(row_ids_key(observed),round(target_rel,6),ci_samples if direct_ci else 0)
+    if analysis_mode=='DIRECT' and len(observed)>=2:
+        dkey=(row_ids_key(observed),round(target_rel,6),ci_samples if ci_samples>0 else 0)
         direct=cached_session_get('direct_fit_cache',dkey)
         if direct is None:
             with st.spinner('Počítám přímý Weibull fit...'):
                 t0=time.perf_counter()
-                direct=fit_direct_weibull(observed,SENTINEL,reliability=target_rel,compute_ci=direct_ci,n_samples=max(ci_samples,1))
+                direct=fit_direct_weibull(observed,SENTINEL,reliability=target_rel,compute_ci=(ci_samples>0),n_samples=max(ci_samples,1))
                 cached_session_put('direct_fit_cache',dkey,direct)
                 st.session_state['last_direct_ms']=1000*(time.perf_counter()-t0)
 
     if analysis_mode=='DIRECT' and direct is None:
-        st.error('Přímý Weibull fit vybrané vrstvy se nepodařilo odhadnout. Hlavní výsledek proto nelze pro tuto vrstvu zobrazit.')
-        primary_eta=primary_k=primary_t=np.nan; primary_ci=None
+        st.error('Přímý Weibull fit vybrané vrstvy se nepodařilo odhadnout.')
+        primary_eta=primary_k=primary_t=np.nan
     elif analysis_mode=='DIRECT':
-        primary_eta,primary_k,primary_t=direct['eta'],direct['k'],direct['t_target']; primary_ci=direct.get('t_target_ci95')
+        primary_eta,primary_k,primary_t=direct['eta'],direct['k'],direct['t_target']
     else:
-        primary_eta,primary_k,primary_t=adaptive.eta,adaptive.k,adaptive.t_target; primary_ci=adaptive.t_target_ci95
+        primary_eta,primary_k,primary_t=adaptive.eta,adaptive.k,adaptive.t_target
+
     m1,m2,m3=st.columns(3)
-    m1.metric('η – scale',('—' if not np.isfinite(primary_eta) else f"{primary_eta:,.0f} d".replace(',',' ')))
+    m1.metric('η – scale',days_years(primary_eta))
     m2.metric('k – shape',('—' if not np.isfinite(primary_k) else f"{primary_k:.3f}"))
-    m3.metric(f"t{rel_text(target_rel)}",('—' if not np.isfinite(primary_t) else f"{primary_t:,.0f} d".replace(',',' ')))
+    m3.metric(f"t{rel_text(target_rel)}",days_years(primary_t))
+
     if analysis_mode=='DIRECT' and direct:
-        c1,c2,c3=st.columns(3); c1.caption(f"95% CI η: **{ci_text(direct.get('eta_ci95'))} d**"); c2.caption(f"95% CI k: **{ci_text(direct.get('k_ci95'),'.3f')}**"); c3.caption(f"95% CI t{rel_text(target_rel)}: **{ci_text(direct.get('t_target_ci95'))} d**")
-        badge(*confidence_direct(direct)); st.info('Hlavní výsledek je nyní samostatný intervalově cenzorovaný Weibull fit pouze vybrané datové vrstvy. Změna vrstvy mění současně η, k, tR, CI i hlavní křivku.')
+        c1,c2,c3=st.columns(3)
+        c1.caption(f"95% CI η: **{ci_days_years(direct.get('eta_ci95'))}**")
+        c2.caption(f"95% CI k: **{ci_text(direct.get('k_ci95'),'.3f')}**")
+        c3.caption(f"95% CI t{rel_text(target_rel)}: **{ci_days_years(direct.get('t_target_ci95'))}**")
+        conf=confidence_direct(direct); badge(conf[0],conf[1]); st.caption(f"Skóre datové důvěry: {conf[2]:.1f} — {conf[3]}.")
+        st.info('Hlavní výsledek je samostatný intervalově cenzorovaný Weibull fit pouze vybrané datové vrstvy.')
     else:
-        c1,c2,c3=st.columns(3); c1.caption(f"95% CI η: **{ci_text(adaptive.eta_ci95)} d**"); c2.caption(f"95% CI k: **{ci_text(adaptive.k_ci95,'.3f')}**"); c3.caption(f"95% CI t{rel_text(target_rel)}: **{ci_text(adaptive.t_target_ci95)} d**")
-        badge(*confidence_adaptive(adaptive)); st.write('**Back-off úroveň:** η =',adaptive.backoff['ETA'],'; k =',adaptive.backoff['K'])
-        if ci_samples==0: st.info('CI jsou v režimu Bez CI vypnuté kvůli rychlosti. Zapněte Rychlé nebo Přesné CI v levém panelu.')
-        elif model.covariance is None: st.info('CI není u importovaného modelu dostupný. Přeučený model s kovarianční maticí CI poskytne.')
+        c1,c2,c3=st.columns(3)
+        c1.caption(f"95% CI η: **{ci_days_years(adaptive.eta_ci95)}**")
+        c2.caption(f"95% CI k: **{ci_text(adaptive.k_ci95,'.3f')}**")
+        c3.caption(f"95% CI t{rel_text(target_rel)}: **{ci_days_years(adaptive.t_target_ci95)}**")
+        conf=confidence_adaptive(adaptive,len(selected_obs),int(selected_obs.NOK.sum()) if len(selected_obs) else 0,exact_exists)
+        badge(conf[0],conf[1]); st.caption(f"Skóre datové důvěry: {conf[2]:.1f} — {conf[3]}.")
+        st.write('**Back-off úroveň:** η =',adaptive.backoff['ETA'],'; k =',adaptive.backoff['K'])
+        if ci_samples==0:
+            st.info('CI jsou v režimu Bez CI vypnuté kvůli rychlosti.')
+        elif model.covariance is None:
+            st.info('CI není u importovaného modelu dostupný. Přeučený model s kovarianční maticí CI poskytne.')
+
+    st.subheader('Survival křivka a skutečná data')
+    d1,d2,d3,d4=st.columns(4)
+    show_ci_band=d1.checkbox('95% CI křivky',value=True,help='Bodový 95% interval spolehlivosti R(t) z nejistoty parametrů. Je dostupný jen při existující kovarianční matici.')
+    show_raw=d2.checkbox('Skutečná vstupní data',value=False)
+    show_turnbull=d3.checkbox('Turnbullova křivka',value=False)
+    show_comparison=d4.checkbox('Druhý model',value=False,help='V adaptivním režimu dopočítá přímý Weibull fit z vybrané datové vrstvy.')
+
+    if analysis_mode=='ADAPTIVE' and show_comparison and len(observed)>=2:
+        dkey=(row_ids_key(observed),round(target_rel,6),ci_samples if ci_samples>0 else 0)
+        direct=cached_session_get('direct_fit_cache',dkey)
+        if direct is None:
+            with st.spinner('Počítám přímý Weibull fit pro porovnání...'):
+                t0=time.perf_counter()
+                direct=fit_direct_weibull(observed,SENTINEL,reliability=target_rel,compute_ci=(ci_samples>0),n_samples=max(ci_samples,1))
+                cached_session_put('direct_fit_cache',dkey,direct)
+                st.session_state['last_direct_ms']=1000*(time.perf_counter()-t0)
+
+    observed_max=0.0
+    if len(observed):
+        fr=observed.loc[observed.Right<SENTINEL,'Right']
+        observed_max=max(float(observed.Left.max()),float(fr.max()) if len(fr) else 0.0)
+    ref_t=primary_t if np.isfinite(primary_t) else adaptive.t_target
+    max_t=max(2500.,adaptive.t85*1.4,ref_t*1.5,observed_max*1.05)
+    times=np.linspace(0,max_t,550)
+    adaptive_surv=model.survival(p,times)
+    direct_surv=direct_survival(direct,times) if direct else None
+
+    if analysis_mode=='DIRECT' and direct:
+        primary_surv=direct_surv; primary_label=f"Přímý Weibull – {level_labels[data_level]}"; target_time=direct['t_target']; target_ci=direct.get('t_target_ci95')
+        comparison_surv=adaptive_surv if show_comparison else None; comparison_label='Adaptivní hierarchický model'
+    else:
+        primary_surv=adaptive_surv; primary_label='Adaptivní hierarchický model'; target_time=adaptive.t_target; target_ci=adaptive.t_target_ci95
+        comparison_surv=direct_surv if show_comparison and direct is not None else None; comparison_label=f"Přímý Weibull – {level_labels[data_level]}"
+
+    curve_ci=None
+    if show_ci_band and ci_samples>0:
+        curve_key=('DIRECT' if analysis_mode=='DIRECT' else 'ADAPTIVE',token,pkey,row_ids_key(observed) if analysis_mode=='DIRECT' else (),round(target_rel,6),round(max_t,2),len(times),ci_samples)
+        curve_ci=cached_session_get('curve_ci_cache',curve_key)
+        if curve_ci is None:
+            with st.spinner('Počítám 95% CI křivky...'):
+                if analysis_mode=='DIRECT':
+                    curve_ci=direct_survival_ci(direct,times,n_samples=max(ci_samples,100))
+                else:
+                    curve_ci=model.survival_ci(p,times,n_samples=max(ci_samples,100),reliability=target_rel)
+                cached_session_put('curve_ci_cache',curve_key,curve_ci,max_items=30)
+    if show_ci_band and curve_ci is None:
+        st.caption('95% CI křivky nelze zobrazit: pro aktivní model/fit není dostupná kovarianční matice nebo jsou CI vypnuté.')
+
+    tb=None
+    if show_turnbull and len(observed):
+        tb_key=(row_ids_key(observed),round(float(max_t),3),len(times)); tb=cached_session_get('turnbull_cache',tb_key)
+        if tb is None:
+            with st.spinner('Počítám Turnbullův odhad...'):
+                t0=time.perf_counter(); tb=turnbull_curve(observed,times,SENTINEL)
+                cached_session_put('turnbull_cache',tb_key,tb,max_items=30)
+                st.session_state['last_turnbull_ms']=1000*(time.perf_counter()-t0)
+
+    fig=survival_diagnostic_figure(times,primary_surv,target_rel,target_time,target_ci,primary_label,
+        observed_df=observed,show_raw=show_raw,show_turnbull=show_turnbull,turnbull_survival=tb,
+        comparison_survival=comparison_surv,comparison_label=comparison_label,
+        primary_ci_lower=(curve_ci[0] if curve_ci is not None else None),primary_ci_upper=(curve_ci[1] if curve_ci is not None else None),
+        sentinel=SENTINEL,max_raw_records=FAMILY.get('visualization',{}).get('max_raw_records',750))
+    st.plotly_chart(fig,use_container_width=True)
+    if show_raw:
+        st.caption('NOK jsou intervaly [L,R]; pravostranně cenzorované záznamy jsou značeny ▶ v čase L.')
 
     tabs=st.tabs(['Datová podpora','Použité efekty / rozklad','Vysvětlení'])
     with tabs[0]:
@@ -272,39 +384,16 @@ elif page=='Jedno měřidlo':
         ce=pd.DataFrame({'Efekt':list((adaptive.contributions_eta or {}).keys()),'Příspěvek log(η)':list((adaptive.contributions_eta or {}).values())})
         ck=pd.DataFrame({'Efekt':list((adaptive.contributions_k or {}).keys()),'Příspěvek log(k)':list((adaptive.contributions_k or {}).values())})
         q1,q2=st.columns(2); q1.dataframe(ce,use_container_width=True,hide_index=True); q2.dataframe(ck,use_container_width=True,hide_index=True)
-        q1.caption(f"Součet LPη = {sum((adaptive.contributions_eta or {}).values()):.4f} → η = {adaptive.eta:.0f} d")
+        q1.caption(f"Součet LPη = {sum((adaptive.contributions_eta or {}).values()):.4f} → η = {days_years(adaptive.eta)}")
         q2.caption(f"Součet LPk = {sum((adaptive.contributions_k or {}).values()):.4f} → k = {adaptive.k:.3f}")
-        st.caption('Tento rozklad vysvětluje adaptivní hierarchický model i tehdy, když je hlavním zobrazeným výsledkem přímý Weibull fit.')
     with tabs[2]:
-        st.markdown(f'''- **η** posouvá Weibullovu křivku v čase; při t=η je R≈36,8 %.\n- **k** určuje tvar hazardu: k<1 klesající, k≈1 konstantní, k>1 rostoucí.\n- **t{rel_text(target_rel)}** je čas, kdy R(t)={target_pct:.1f} %.\n- **95% CI** je nejistota odhadu, nikoli interval selhání konkrétního kusu.\n- **Adaptivní režim** používá hierarchické efekty a back-off.\n- **Přímý režim** fituje nový dvouparametrický Weibull pouze na právě zvolené datové vrstvě.\n- **Datová důvěra HIGH/MEDIUM/LOW** je orientační kombinace datové podpory a šířky CI; není to další statistický parametr modelu.''')
+        st.markdown(f"""- **η** posouvá Weibullovu křivku v čase; při t=η je R≈36,8 %.
+- **k** určuje tvar hazardu: k<1 klesající, k≈1 konstantní, k>1 rostoucí.
+- **t{rel_text(target_rel)}** je čas, kdy R(t)={target_pct:.1f} %.
+- **95% CI křivky** ukazuje bodovou nejistotu odhadované R(t) způsobenou nejistotou parametrů.
+- **Datová důvěra** nyní kombinuje n, počet NOK, back-off, existenci přesné kombinace a šířku CI, pokud je dostupná.""")
 
-    st.subheader('Survival křivka a skutečná data')
-    observed_max=0.0
-    if len(observed):
-        fr=observed.loc[observed.Right<SENTINEL,'Right']; observed_max=max(float(observed.Left.max()),float(fr.max()) if len(fr) else 0.0)
-    ref_t=primary_t if np.isfinite(primary_t) else adaptive.t_target
-    max_t=max(2500.,adaptive.t85*1.4,ref_t*1.5,observed_max*1.05); times=np.linspace(0,max_t,550)
-    adaptive_surv=model.survival(p,times)
-    direct_surv=direct_survival(direct,times) if direct else None
-    if analysis_mode=='DIRECT' and direct:
-        primary_surv=direct_surv; primary_label=f"Přímý Weibull – {level_labels[data_level]}"; target_time=direct['t_target']; target_ci=direct.get('t_target_ci95')
-        comparison_surv=adaptive_surv if show_comparison else None; comparison_label='Adaptivní hierarchický model'
-    else:
-        primary_surv=adaptive_surv; primary_label='Adaptivní hierarchický model'; target_time=adaptive.t_target; target_ci=adaptive.t_target_ci95
-        comparison_surv=direct_surv if show_comparison and direct is not None else None; comparison_label=f"Přímý Weibull – {level_labels[data_level]}"
-    tb=None
-    if show_turnbull and len(observed):
-        tb_key=(row_ids_key(observed),round(float(max_t),3),len(times))
-        tb=cached_session_get('turnbull_cache',tb_key)
-        if tb is None:
-            with st.spinner('Počítám Turnbullův odhad...'):
-                t0=time.perf_counter(); tb=turnbull_curve(observed,times,SENTINEL)
-                cached_session_put('turnbull_cache',tb_key,tb,max_items=30)
-                st.session_state['last_turnbull_ms']=1000*(time.perf_counter()-t0)
-    fig=survival_diagnostic_figure(times,primary_surv,target_rel,target_time,target_ci,primary_label,observed_df=observed,show_raw=show_raw,show_turnbull=show_turnbull,turnbull_survival=tb,comparison_survival=comparison_surv,comparison_label=comparison_label,sentinel=SENTINEL,max_raw_records=FAMILY.get('visualization',{}).get('max_raw_records',750))
-    st.plotly_chart(fig,use_container_width=True)
-    if show_raw: st.caption('NOK jsou intervaly [L,R]; pravostranně cenzorované záznamy jsou značeny ▶ v čase L.')
-    st.caption(f"Výkon: bodová/CI predikce {st.session_state.get('last_adaptive_ms',0):.0f} ms | poslední přímý fit {st.session_state.get('last_direct_ms',0):.0f} ms | poslední Turnbull {st.session_state.get('last_turnbull_ms',0):.0f} ms. Opakované stejné výpočty se berou z cache relace.")
+    st.caption(f"Výkon: bodová/CI predikce {st.session_state.get('last_adaptive_ms',0):.0f} ms | poslední přímý fit {st.session_state.get('last_direct_ms',0):.0f} ms | poslední Turnbull {st.session_state.get('last_turnbull_ms',0):.0f} ms.")
 
 elif page=='Hromadná analýza':
     st.subheader(f"Hromadná analýza – cíl t{rel_text(target_rel)}")
@@ -329,6 +418,9 @@ elif page=='Hromadná analýza':
 
 elif page=='Model a diagnostika':
     st.subheader('Aktuální model'); st.write('Location–shape Weibull s adaptivním back-offem.'); st.write(f"Aktivní model: **{model_name}**"); st.write('Kovarianční matice / CI:','dostupná' if model.covariance is not None else 'nedostupná')
+    st.markdown('**Využitelná datová podpora pro nový refit**')
+    st.dataframe(model_coverage_summary(df),use_container_width=True,hide_index=True)
+    st.caption('Importovaný model byl původně fitován pouze na kompletních profilech. Refit v této verzi zachovává i částečné záznamy: např. záznam bez TYP může stále přispět k interceptu, CAT, CLMARK×RNG a PROD, pokud jsou tyto hodnoty známé.')
     st.dataframe(model.combo,use_container_width=True)
     c1,c2=st.columns(2)
     with c1:
@@ -337,7 +429,8 @@ elif page=='Model a diagnostika':
         fig=go.Figure(go.Histogram(x=model.prod.u_k,nbinsx=20)); fig.update_layout(title='PROD efekty pro k'); st.plotly_chart(fig,use_container_width=True)
 
 elif page=='Přeučení modelu':
-    st.subheader('Přeučení kandidátního modelu'); st.warning('Refit může trvat. Kovarianční matice umožní 95% CI pro libovolně zvolenou cílovou spolehlivost.')
+    st.subheader('Přeučení kandidátního modelu'); st.warning('Refit může trvat. Nový refit využívá i záznamy s částečně chybějícími kovariátami: každý řádek informuje ty efekty, pro které má známá data. Kovarianční matice umožní 95% CI.')
+    st.dataframe(model_coverage_summary(df),use_container_width=True,hide_index=True)
     compute_cov=st.checkbox('Po fitu dopočítat kovarianční matici a CI',value=True)
     if st.button('Přeučit na aktuálních datech',type='primary'):
         with st.spinner('Probíhá fit a případný výpočet kovarianční matice...'):
@@ -351,6 +444,3 @@ elif page=='Přeučení modelu':
         candidate=AdaptiveWeibullModel.load(cand_path).set_population_context(df); st.session_state['candidate_model']=candidate; st.session_state['active_model']=candidate; st.session_state['active_model_name']='Kandidátní model – načtený'; st.rerun()
     if 'candidate_fit' in st.session_state: st.json(st.session_state['candidate_fit'])
 
-st.divider()
-with st.expander('Design aplikace – kde ho ručně měnit'):
-    st.markdown('''- **`.streamlit/config.toml`** – téma Streamlitu.\n- **`assets/style.css`** – vlastní CSS, karty, zaoblení, mezery, barvy.\n- **`src/plots.py`** – Plotly grafy.\n- **`app.py`** – layout a UI logika.\n- **`src/model.py`** – statistické jádro; design od něj zůstává oddělený.''')

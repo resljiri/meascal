@@ -17,6 +17,8 @@ def survival_diagnostic_figure(
     turnbull_survival=None,
     comparison_survival=None,
     comparison_label=None,
+    primary_ci_lower=None,
+    primary_ci_upper=None,
     sentinel=99999.0,
     max_raw_records=750,
 ):
@@ -30,6 +32,11 @@ def survival_diagnostic_figure(
     else:
         fig=make_subplots(rows=1,cols=1); main_row,raw_row=1,None
 
+    if primary_ci_lower is not None and primary_ci_upper is not None:
+        lo=np.asarray(primary_ci_lower,float); hi=np.asarray(primary_ci_upper,float)
+        if len(lo)==len(times) and len(hi)==len(times):
+            fig.add_trace(go.Scatter(x=times,y=hi,mode="lines",line=dict(width=0),hoverinfo="skip",showlegend=False,name="95% CI horní"),row=main_row,col=1)
+            fig.add_trace(go.Scatter(x=times,y=lo,mode="lines",line=dict(width=0),fill="tonexty",fillcolor="rgba(99,110,250,0.15)",hoverinfo="skip",name="95% CI křivky"),row=main_row,col=1)
     fig.add_trace(go.Scatter(x=times,y=primary_survival,mode="lines",name=primary_label,line=dict(width=3)),row=main_row,col=1)
     if comparison_survival is not None:
         fig.add_trace(go.Scatter(x=times,y=comparison_survival,mode="lines",name=comparison_label or "Porovnání",line=dict(width=2,dash="dash")),row=main_row,col=1)
@@ -39,7 +46,9 @@ def survival_diagnostic_figure(
     rel_pct=100*float(target_reliability)
     rel_label=(f"{rel_pct:.0f}" if abs(rel_pct-round(rel_pct))<1e-8 else f"{rel_pct:.1f}")
     fig.add_hline(y=target_reliability,line_dash="dot",annotation_text=f"R = {rel_label} %",row=main_row,col=1)
-    fig.add_vline(x=target_time,line_dash="dot",annotation_text=f"t{rel_label} = {target_time:.0f} d",row=main_row,col=1)
+    years=float(target_time)/365.25
+    years_txt=f"{years:.1f}".replace(".",",")
+    fig.add_vline(x=target_time,line_dash="dot",annotation_text=f"t{rel_label} = {target_time:.0f} d ({years_txt} roku)",row=main_row,col=1)
     if target_ci:
         fig.add_vrect(x0=target_ci[0],x1=target_ci[1],opacity=.10,line_width=0,annotation_text=f"95% CI t{rel_label}",row=main_row,col=1)
 
