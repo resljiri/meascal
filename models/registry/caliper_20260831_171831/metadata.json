@@ -1,0 +1,19 @@
+{
+  "family": "CALIPER",
+  "version": "caliper_20260831_171831",
+  "kind": "joblib",
+  "created_at": "2026-08-31T17:18:31+00:00",
+  "source": "refit from application",
+  "data_fingerprint": "e5a6ab886897b193",
+  "fit": {
+    "success": true,
+    "message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+    "objective": 8170.358510577222,
+    "n": 7462,
+    "NOK": 2649,
+    "n_params": 53,
+    "covariance_available": true
+  },
+  "covariance_available": true,
+  "n_parameters": 53
+}

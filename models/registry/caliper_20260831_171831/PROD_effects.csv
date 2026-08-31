@@ -1,0 +1,53 @@
+PROD,n,NOK,u_eta,eta_multiplier,u_k,k_multiplier,eta_active,k_active
+ATORN,4,2,0.0,1.0,0.0,1.0,False,False
+BAHCO,2,0,0.0,1.0,0.0,1.0,False,False
+BOS HK,30,15,0.0,1.0,0.0,1.0,False,False
+BOS Teplice,3,0,0.0,1.0,0.0,1.0,False,False
+Beta,1,1,0.0,1.0,0.0,1.0,False,False
+Brown & Sharpe,1,0,0.0,1.0,0.0,1.0,False,False
+China,130,43,0.13865420535134368,1.148726807733911,0.20955649955606276,1.233131044499242,True,True
+Extol,1,0,0.0,1.0,0.0,1.0,False,False
+FACOM,102,17,0.44395130026665897,1.558854567971568,0.0,1.0,True,False
+Filletta,289,73,0.15670287035924518,1.1696480251664856,0.08344366873786999,1.0870239801354,True,True
+HHW,47,16,0.0,1.0,0.0,1.0,False,False
+Helios Preisser,1,1,0.0,1.0,0.0,1.0,False,False
+Holex,5,1,0.0,1.0,0.0,1.0,False,False
+Hommel,51,17,0.0,1.0,0.0,1.0,False,False
+Insize,241,27,0.5646511681336476,1.758834138303605,0.017787956135668175,1.0179471040657702,True,True
+KMITEX,33,13,0.0,1.0,0.0,1.0,False,False
+KS TOOLS,32,9,0.0,1.0,0.0,1.0,False,False
+Kinex,206,56,0.0711361338416131,1.0737273865534005,-0.00942016337266491,0.9906240673704173,True,True
+Links,1,0,0.0,1.0,0.0,1.0,False,False
+MC,1,0,0.0,1.0,0.0,1.0,False,False
+MEBA,4,0,0.0,1.0,0.0,1.0,False,False
+MITAKO,434,254,-0.4002569118678925,0.6701478549804364,-0.11924839827600343,0.8875872982221775,True,True
+MWQ,1,0,0.0,1.0,0.0,1.0,False,False
+Mahr,105,18,0.7570756748906156,2.132032339672794,0.0,1.0,True,False
+Massi,4,0,0.0,1.0,0.0,1.0,False,False
+Mauser,16,7,0.0,1.0,0.0,1.0,False,False
+Mitutoyo,940,292,0.7079204599281218,2.029765887255821,-0.06563368457977738,0.9364738462785153,True,True
+P.Rochrolle,3,0,0.0,1.0,0.0,1.0,False,False
+Preisser,1,0,0.0,1.0,0.0,1.0,False,False
+Prvomajská,1,1,0.0,1.0,0.0,1.0,False,False
+Retech,1,0,0.0,1.0,0.0,1.0,False,False
+Roch,1,0,0.0,1.0,0.0,1.0,False,False
+Samson,39,17,0.0,1.0,0.0,1.0,False,False
+Scala,1,1,0.0,1.0,0.0,1.0,False,False
+Schut,163,132,-0.08278210789171205,0.9205517063212869,0.0824158286120645,1.0859072672703631,True,True
+Senator,9,1,0.0,1.0,0.0,1.0,False,False
+Shan,4,2,0.0,1.0,0.0,1.0,False,False
+Shut,1,1,0.0,1.0,0.0,1.0,False,False
+Smiec,2,1,0.0,1.0,0.0,1.0,False,False
+Somet,2942,1015,0.17626824256989893,1.192757964204193,0.0945633835425552,1.099178830773272,True,True
+Stanley,1,1,0.0,1.0,0.0,1.0,False,False
+Sylvac,28,13,0.0,1.0,0.0,1.0,False,False
+TESA,31,18,0.0,1.0,0.0,1.0,False,False
+UIK,12,6,0.0,1.0,0.0,1.0,False,False
+Unior,2,0,0.0,1.0,0.0,1.0,False,False
+VIK,4,2,0.0,1.0,0.0,1.0,False,False
+VIS,17,2,0.0,1.0,0.0,1.0,False,False
+Vigor,4,4,0.0,1.0,0.0,1.0,False,False
+Vogel,24,7,0.0,1.0,0.0,1.0,False,False
+Würth,71,14,0.0,1.0,0.0,1.0,False,False
+Zevela INOX,2,0,0.0,1.0,0.0,1.0,False,False
+Škoda Auto,1,0,0.0,1.0,0.0,1.0,False,False
