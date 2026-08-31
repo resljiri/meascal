@@ -1,0 +1,8 @@
+{
+  "family": "CALIPER",
+  "kind": "imported_csv",
+  "version": "caliper_v1",
+  "path": "models/caliper_v1",
+  "created_at": null,
+  "source": "repository default"
+}
