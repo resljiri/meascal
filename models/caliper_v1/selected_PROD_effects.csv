@@ -1,0 +1,24 @@
+PROD,n,NOK,u_eta,eta_multiplier,u_k,k_multiplier,eta_active,k_active
+China,2,0,0.0,1.0,0.0,1.0,False,False
+FACOM,22,1,0.0,1.0,0.0,1.0,False,False
+HHW,1,1,0.0,1.0,0.0,1.0,False,False
+Hommel,16,4,0.0,1.0,0.0,1.0,False,False
+Insize,123,16,0.1847403803034591,1.2029061014677853,0.0,1.0,True,False
+KMITEX,2,0,0.0,1.0,0.0,1.0,False,False
+KS TOOLS,1,0,0.0,1.0,0.0,1.0,False,False
+Kinex,19,4,0.0,1.0,0.0,1.0,False,False
+Links,1,0,0.0,1.0,0.0,1.0,False,False
+MITAKO,412,241,-0.3358150640624899,0.7147552775313711,-0.25603311580585525,0.7741163328815847,True,True
+MWQ,1,0,0.0,1.0,0.0,1.0,False,False
+Mahr,48,11,0.0,1.0,0.0,1.0,False,False
+Mauser,6,4,0.0,1.0,0.0,1.0,False,False
+Mitutoyo,554,176,0.487954190859423,1.6289802260791855,-0.04351713365553918,0.9574161499119153,True,True
+Samson,3,1,0.0,1.0,0.0,1.0,False,False
+Schut,159,131,-0.3473739260983979,0.7065410847058863,-0.03187587055612472,0.9686268097243617,True,True
+Shut,1,1,0.0,1.0,0.0,1.0,False,False
+Smiec,1,1,0.0,1.0,0.0,1.0,False,False
+Somet,493,209,-0.27297707734853566,0.761110234093596,0.21375989188241737,1.2383252871410368,True,True
+Sylvac,5,3,0.0,1.0,0.0,1.0,False,False
+TESA,9,5,0.0,1.0,0.0,1.0,False,False
+Unior,2,0,0.0,1.0,0.0,1.0,False,False
+Vigor,4,4,0.0,1.0,0.0,1.0,False,False

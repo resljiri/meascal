@@ -1,0 +1,12 @@
+/* Calibration Reliability System – uživatelsky upravitelný styl.
+   Barvy, zaoblení a velikosti lze měnit zde bez zásahu do statistického jádra. */
+:root {
+  --app-accent: #0f766e;
+  --app-soft: #f0fdfa;
+  --app-warning: #fff7ed;
+  --app-radius: 10px;
+}
+.block-container { padding-top: 1.6rem; padding-bottom: 2rem; }
+[data-testid="stMetric"] { border: 1px solid rgba(128,128,128,.18); border-radius: var(--app-radius); padding: .8rem; }
+.crs-note { padding: .7rem .9rem; border-radius: var(--app-radius); background: var(--app-soft); margin: .3rem 0 .8rem 0; }
+.crs-muted { opacity: .78; font-size: .92rem; }

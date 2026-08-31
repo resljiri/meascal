@@ -1,0 +1,48 @@
+app:
+  title: Calibration Reliability System
+  default_family: CALIPER
+  id_field: null
+
+families:
+  CALIPER:
+    label: Posuvná měřítka
+    data_file: data/calipers.csv
+    model_dir: models/caliper_v1
+    field_map:
+      left: Left
+      right: Right
+      family: null
+      manufacturer: PROD
+      type: TYP
+      environment: CAT
+      construction: CLMARK
+      range: RNG
+      commissioning_date: null
+    filter_fields:
+      - PROD
+      - TYP
+      - CAT
+      - CLMARK
+      - RNG
+    optional_filter_fields: []
+    visualization:
+      max_raw_records: 750
+    model:
+      reference_cat: D
+      right_censor_sentinel: 99999
+      penalties:
+        eta_combo: 0.70
+        eta_prod: 0.40
+        eta_type: 0.65
+        k_combo: 0.25
+        k_prod: 0.15
+        k_type: 0.10
+      thresholds:
+        eta_combo: {min_n: 50, min_nok: 10}
+        eta_prod:  {min_n: 70, min_nok: 15}
+        eta_type:  {min_n: 70, min_nok: 15}
+        k_combo:   {min_n: 100, min_nok: 20}
+        k_prod:    {min_n: 100, min_nok: 20}
+        k_type:    {min_n: 150, min_nok: 30}
+      k_bounds: [0.25, 2.5]
+      eta_bounds_days: [10, 200000]
